@@ -124,6 +124,12 @@ valid_file_extensions = [
     '.jpg',
     '.jpeg'
 ]
+
+# If we want to search recursively in all sub-folders, set this to True
+# (Useful when your trailcam has to stack images into sub-directories)
+# Note: if this is enabled, it is strongly encouraged to set the ordering
+# to either ORDER_CREATED or ORDER_MODIFIED as name conflicts may be likely
+recursive_search = False
 ```
 
 Sequential ordering can be determined using three different methods:
@@ -153,7 +159,7 @@ framerate = 25
 ```
 
 #### Multithreading Option
-Multithreading is used when extracting temperature values from images.  By default, the script will create a number of processes that matches the number of cores of your system (recommended).
+Multithreading is used when extracting temperature values from images and when drawing graphs on individual image frames.  By default, the script will create a number of processes that matches the number of cores of your system (recommended).
 But you _can_ adjust this with:
 
 ```python
@@ -161,7 +167,6 @@ But you _can_ adjust this with:
 # but if left "None", it will use what your OS returns back as the CPU count
 process_threads = None
 ```
-A note on multithreading: this is not used when drawing graphs on the images themselves because the overhead of moving image data between the parent process and subprocesses proved far too expensive.  Through benchmarking trials, it was found to be much faster to simply loop through each image individually.
 
 ## Examples
 

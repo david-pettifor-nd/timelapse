@@ -92,6 +92,12 @@ class TimeLapse():
         # Where is the directory with all of the files?
         self.images_directory = None
 
+        # If we want to search recursively in all sub-folders, set this to True
+        # (Useful when your trailcam has to stack images)
+        # Note: if this is enabled, it is strongly encouraged to set the ordering
+        # to either ORDER_CREATED or ORDER_MODIFIED as name conflicts may be likely
+        self.recursive_search = False
+
         # What directory should we save temporary images in?
         self.save_directory = None
 
@@ -138,12 +144,13 @@ class TimeLapse():
         # this can be changed after init though, before processing
         self.order = ORDER_NAME
 
-        # COMPUTED VALUES:
+        # COMPUTED VALUES (DO NOT MODIFY):
         self.deg_min = None
         self.deg_max = None
         self.pixels_per_degree = 1
         self.total_frames = 1
         self.image_series = []
+        self.max_digits = 1
 
         # now that we have our defaults set, update any that are passed in
         self.__dict__.update(kwargs)
@@ -230,7 +237,7 @@ class TimeLapse():
         Also draws a connecting line between each of them.
         Note: If PLOT_POIONT_SIZE is `None`, the points will not be drawn, and only the line will be drawn.
         """
-        img = ImageDraw.Draw(image['image'], 'RGBA')
+        img = ImageDraw.Draw(image, 'RGBA')
         last_point = None
         for index, point in enumerate(temperature_points, start=0):
             y = self.get_temp_y_point(point)
@@ -245,20 +252,43 @@ class TimeLapse():
                 'x': x,
                 'y': y
             }
-        return image['image']
+        return image
 
-    def draw_graph(self, image):
+    def draw_graph(self, file_meta):
         """
         For the passed in image, draw the graph box, grid, and all temperature points.
         """
-        image['image'] = self.draw_graph_borders(image['image'])
-        image['image'] = self.draw_grid(image['image'])
-        image['image'] = self.add_temps(image, image['temps'])
+        # open the actual file as an image object
+        im = Image.open(os.path.join(self.images_directory, file_meta['file_name']))
+        im = self.draw_graph_borders(im)
+        im = self.draw_grid(im)
+        im = self.add_temps(im, file_meta['temps'])
 
-        return image
+        # write the image to the save directory
+        # composite the file name (based on index/order)
+        new_filename = 'TIMELAPSE' + format(file_meta['index'], '0'+str(self.max_digits)) + '.JPG'
+        im.save(os.path.join(self.save_directory, new_filename))
+
 
     # --== END GRAPH DRAWING FUNCTIONS ==--
-    
+    def load_image(self, filename):
+        """
+        To be called inside a loop, passing in the next file it finds.
+        Determines if the file should be included based on its extension,
+        and pre-calculates its appropriate ordering.
+        """
+        if filename.lower().endswith(tuple(self.valid_file_extensions)):
+            # how do we want to order these?
+            order_value = filename
+            if self.order:
+                # assume this is a callable function
+                order_value = self.order(os.path.join(self.images_directory, filename))
+            return {
+                'file_name': filename,
+                'order': order_value
+            }
+        return None        
+
     def load_images(self):
         """
         Loads up the images from the directory set and loads any image
@@ -269,17 +299,19 @@ class TimeLapse():
         These are stored in `self.image_series`.
         """
         file_list = []
-        for filename in os.listdir(self.images_directory):
-            if filename.lower().endswith(tuple(self.valid_file_extensions)):
-                # how do we want to order these?
-                order_value = filename
-                if self.order:
-                    # assume this is a callable function
-                    order_value = self.order(os.path.join(self.images_directory, filename))
-                file_list.append({
-                    'file_name': filename,
-                    'order': order_value
-                })
+        if self.recursive_search:
+            for folder, subFolder, files in os.walk(self.images_directory):
+                for item in files:
+                    relative_path = os.path.relpath(os.path.join(folder, item), self.images_directory)
+                    included = self.load_image(item)
+                    if included:
+                        included['file_name'] = relative_path
+                        file_list.append(included)
+        else:
+            for filename in os.listdir(self.images_directory):
+                included = self.load_image(filename)
+                if included:
+                    file_list.append(included)
         self.image_series = sorted(file_list, key=lambda item: item['order'])
 
         # set the index for each image (needed later)
@@ -302,9 +334,8 @@ class TimeLapse():
         # for the temperature value
         try:
             # extract text and convert to an integer
-            temp = int(self.temperature_text_parser)
+            temp = int(self.temperature_text_parser(text))
             return {
-                'image': im,
                 'file_name': file_meta['file_name'],
                 'temp': temp,
                 'order': file_meta['order'],
@@ -319,13 +350,11 @@ class TimeLapse():
             temp = int(input("Enter temperature seen in image:"))
             
             return {
-                'image': im,
                 'file_name': file_meta['file_name'],
                 'temp': temp,
                 'order': file_meta['order'],
                 'index': file_meta['index']
             }
-
 
     def process_images(self):
         """
@@ -368,22 +397,16 @@ class TimeLapse():
         on each image as it is copied over.
         """
         # how many digits of leading zeros will be possibly need?
-        max_digits = len(str(len(self.image_series)))
+        self.max_digits = len(str(len(self.image_series)))
         if add_graph:
             print("Generating graphs on all frames...")
-            # Special note from the developer: you may be asking, why not thread this?
-            # Because of the overhead of moving PIL Image files into their own processes
-            # back and forth, I found the overhead to be monsterously expensive, and thus
-            # faster (by orders in the 10s) to simply loop through them.
-            for img in self.image_series:
-                image_obj = self.draw_graph(img)
-                # composite the file name (based on index/order)
-                new_filename = 'TIMELAPSE' + format(image_obj['index'], '0'+str(max_digits)) + '.JPG'
-                image_obj['image'].save(os.path.join(self.save_directory, new_filename))
+            # subprocess all of these (so much faster)
+            with Pool(self.process_threads) as p:
+                p.map(self.draw_graph, self.image_series)
         else:
             # just copy it over then
             for index, image_obj in enumerate(self.image_series, start=1):
-                new_filename = 'TIMELAPSE' + format(index, '0'+str(max_digits)) + '.JPG'
+                new_filename = 'TIMELAPSE' + format(index, '0'+str(self.max_digits)) + '.JPG'
                 shutil.copyfile(os.path.join(self.images_directory, image_obj['file_name']), os.path.join(self.save_directory, new_filename))
 
     def render_video(self, save_as='timelapse.mp4'):
