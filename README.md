@@ -1,6 +1,12 @@
 # TimeLapse
 A Python class that renders timelapse video from sequential photographs.
 
+## Requirements
+There are two external programs that you must have installed on your system in order to fully support this library:
+* [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+    * And the Python wrapper for it: [pytesseract](https://github.com/madmaze/pytesseract)
+* [ffmpeg](https://ffmpeg.org/) (called through an `os.system()` call)
+
 ## Basic Usage
 
 The most basic usage to render a video (with a graph showing temperature changes on each frame):
